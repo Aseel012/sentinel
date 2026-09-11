@@ -10,12 +10,19 @@ from sentinel.models import ProcessObservation
 from sentinel.models.common import CollectionResult, CollectionStatus
 from .base import collect
 
-_SECRET = re.compile(r"(?i)(token|password|passwd|secret|api[_-]?key|authorization)(=|:)([^\s]+)")
+_SECRET_NAME = r"token|password|passwd|secret|api[_-]?key|authorization"
+_SECRET_ASSIGNMENT = re.compile(rf"(?i)({_SECRET_NAME})(=|:)([^\s]+)")
+_SECRET_ARGUMENT = re.compile(rf"(?i)(--?(?:{_SECRET_NAME})\b)(\s+)([^\s]+)")
+_SHORT_SECRET_ARGUMENT = re.compile(r"(?i)(^|\s)(-[pk])(\s+)([^\s]+)")
+_SECRET_QUERY = re.compile(rf"(?i)([?&]({_SECRET_NAME)=)([^&\s]+)")
 _COMMAND_LIMIT = 1024
 
 
 def redact_command(command: str) -> str:
-    return _SECRET.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", command)[:_COMMAND_LIMIT]
+    command = _SECRET_ASSIGNMENT.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", command)
+    command = _SECRET_ARGUMENT.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", command)
+    command = _SHORT_SECRET_ARGUMENT.sub(lambda match: f"{match.group(1)}{match.group(2)}{match.group(3)}[REDACTED]", command)
+    return _SECRET_QUERY.sub(lambda match: f"{match.group(1)}[REDACTED]", command)[:_COMMAND_LIMIT]
 
 
 def parse_process_stat(text: str) -> tuple[str, str, int, int, int, int, int, int]:

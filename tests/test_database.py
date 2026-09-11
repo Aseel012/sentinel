@@ -1,11 +1,15 @@
 import importlib
 import sqlite3
+import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
 
 from sentinel.storage.database import (DEFAULT_BUSY_TIMEOUT_MS, database_connection, open_connection,
                                        resolve_database_path, transaction)
+from sentinel.storage.health import inspect_database
+from sentinel.storage.migrations import initialize_schema
 
 
 class DatabasePathTests(unittest.TestCase):
@@ -44,6 +48,22 @@ class DatabaseConnectionTests(unittest.TestCase):
                 self.assertEqual(connection.execute("PRAGMA foreign_keys").fetchone()[0], 1)
                 self.assertEqual(connection.execute("PRAGMA busy_timeout").fetchone()[0], DEFAULT_BUSY_TIMEOUT_MS)
                 self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+            finally:
+                connection.close()
+
+    def test_database_and_wal_files_are_private_despite_permissive_umask(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state" / "sentinel.db"
+            previous_umask = os.umask(0o022)
+            try:
+                connection = open_connection(path)
+            finally:
+                os.umask(previous_umask)
+            try:
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+                wal_path = path.with_name("sentinel.db-wal")
+                if wal_path.exists():
+                    self.assertEqual(stat.S_IMODE(wal_path.stat().st_mode), 0o600)
             finally:
                 connection.close()
 
@@ -90,3 +110,12 @@ class DatabaseConnectionTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     with transaction(connection, mode="invalid"):
                         pass
+
+    def test_health_inspection_reports_initialized_database(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with database_connection(Path(directory) / "sentinel.db") as connection:
+                initialize_schema(connection)
+                health = inspect_database(connection)
+        self.assertTrue(health.integrity_ok)
+        self.assertEqual(health.schema_version, 1)
+        self.assertEqual(health.detail, "ok")

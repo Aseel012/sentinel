@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import stat
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -51,6 +52,30 @@ def _prepare_parent(path: Path) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 
 
+def _secure_database_file(path: Path) -> None:
+    """Require a regular, non-symlinked database file readable only by its owner."""
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISREG(metadata.st_mode):
+        raise OSError("database path must be a regular file, not a symlink or special file")
+    os.chmod(path, 0o600)
+
+
+def _prepare_database_file(path: Path) -> None:
+    """Create a new database with 0600 permissions before SQLite opens it."""
+    _secure_database_file(path)
+    if path.exists():
+        return
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        _secure_database_file(path)
+    else:
+        os.close(descriptor)
+
+
 def configure_connection(
     connection: sqlite3.Connection,
     *,
@@ -87,9 +112,13 @@ def open_connection(
     """
     database_path = resolve_database_path(path, environ=environ, home=home)
     _prepare_parent(database_path)
+    _prepare_database_file(database_path)
     connection = sqlite3.connect(database_path, timeout=busy_timeout_ms / 1_000)
     try:
         configure_connection(connection, busy_timeout_ms=busy_timeout_ms)
+        _secure_database_file(database_path)
+        _secure_database_file(database_path.with_name(f"{database_path.name}-wal"))
+        _secure_database_file(database_path.with_name(f"{database_path.name}-shm"))
     except BaseException:
         connection.close()
         raise

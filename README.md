@@ -1,8 +1,8 @@
 # Sentinel
 
-Sentinel is a local-first Linux observability product. This repository currently implements Phase 1: trustworthy, typed observation of system, memory, CPU counters, processes, filesystem capacity, network counters, and optional systemd services.
+Sentinel is a local-first Linux observability product. It currently provides trustworthy, typed Linux observation, persistent SQLite snapshots, and a reusable foreground sampling foundation.
 
-It uses only the Python standard library, requires no root access, makes no network connections, and stores no data yet.
+It uses only the Python standard library, requires no root access, and makes no network connections. Persistence is explicit through application services; normal `status` remains read-only.
 
 ## Run
 
@@ -18,4 +18,4 @@ Install it with `pipx install .` or `python3 -m pip install .` to expose the `se
 
 ## Scope
 
-The source specification authorizes Phase 1 only. Persistence, daemon operation, derived rates, baselines, incident handling, and AI context are intentionally deferred so that observation semantics remain correct first. See [architecture](docs/architecture.md), [collectors](docs/collectors.md), and [privacy](docs/privacy.md).
+Persistent storage is versioned, relational, and transactional. Daemon operation, derived rates, baselines, incident handling, and AI context remain deferred. See [architecture](docs/architecture.md), [collectors](docs/collectors.md), and [privacy](docs/privacy.md).

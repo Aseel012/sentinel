@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+import math
 from typing import Generic, TypeVar
 
 T = TypeVar("T")
@@ -36,8 +37,8 @@ class CollectionResult(Generic[T]):
             raise ValueError("collected_at must be timezone-aware UTC")
         if self.collected_at.utcoffset() != UTC.utcoffset(self.collected_at):
             raise ValueError("collected_at must use UTC")
-        if self.duration_seconds < 0:
-            raise ValueError("duration_seconds cannot be negative")
+        if not math.isfinite(self.duration_seconds) or self.duration_seconds < 0:
+            raise ValueError("duration_seconds must be finite and non-negative")
         if self.status is CollectionStatus.SUCCESS and self.value is None:
             raise ValueError("a successful collection requires a value")
 

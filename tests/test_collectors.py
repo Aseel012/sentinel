@@ -37,9 +37,12 @@ class CollectorTests(unittest.TestCase):
                          ("two words", "S", 12, 30, 4, 99, 4096, 7))
 
     def test_command_redaction_and_bound(self) -> None:
-        command = redact_command("app --token=topsecret --password:pw " + "x" * 2000)
+        command = redact_command("app --token=topsecret --password:pw --secret hunter2 -p short https://x/?api_key=query " + "x" * 2000)
         self.assertNotIn("topsecret", command)
         self.assertNotIn("password:pw", command)
+        self.assertNotIn("hunter2", command)
+        self.assertNotIn("short", command)
+        self.assertNotIn("query", command)
         self.assertIn("[REDACTED]", command)
         self.assertEqual(len(command), 1024)
 
