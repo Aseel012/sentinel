@@ -4,24 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import asdict, is_dataclass
-from datetime import datetime
-from enum import Enum
-from typing import Any
+from dataclasses import asdict
 
 from sentinel import __version__
 from sentinel.application.snapshot_service import SnapshotService
 from sentinel.cli.formatters import format_snapshot
+from sentinel.cli.json_output import status_response
 from sentinel.platform.capabilities import detect_capabilities
 from sentinel.platform.detection import detect_platform
-
-
-def _json_default(value: Any) -> Any:
-    if isinstance(value, (datetime, Enum)):
-        return value.isoformat() if isinstance(value, datetime) else value.value
-    if is_dataclass(value):
-        return asdict(value)
-    raise TypeError(f"cannot serialize {type(value).__name__}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
         capabilities = detect_capabilities(info)
         if args.as_json:
             print(json.dumps({"schema_version": "1", "platform": asdict(info),
-                              "capabilities": [asdict(item) for item in capabilities]}, default=_json_default))
+                              "capabilities": [asdict(item) for item in capabilities]}, default=str))
         else:
             print("Sentinel Doctor")
             for capability in capabilities:
@@ -50,9 +40,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if info.is_linux and info.proc_available else 2
     collection = SnapshotService().collect()
     if getattr(args, "as_json", False):
-        print(json.dumps({"schema_version": "1", "snapshot": asdict(collection.snapshot),
-                          "collectors": {name: asdict(result) for name, result in collection.collector_results}},
-                         default=_json_default))
+        print(json.dumps(status_response(collection), separators=(",", ":")))
     else:
         print(format_snapshot(collection))
     return 0
