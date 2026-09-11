@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sentinel-observe"
+version = "0.1.0"
+description = "Local-first Linux system observation foundation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "Sentinel contributors"}]
+dependencies = []
+
+[project.scripts]
+sentinel = "sentinel.main:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
