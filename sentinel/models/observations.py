@@ -93,6 +93,30 @@ class ServiceObservation:
 
 
 @dataclass(frozen=True, slots=True)
+class EventObservation:
+    """Bounded, normalized journal event facts; cursor is the source identity."""
+
+    cursor: str
+    timestamp: datetime
+    source: str
+    priority: int | None
+    unit: str | None
+    pid: int | None
+    comm: str | None
+    message: str
+    boot_id: str | None
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class JournalBatch:
+    """Accepted source records and the last safely consumed journal identity."""
+
+    events: tuple[EventObservation, ...]
+    next_cursor: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class SystemSnapshot:
     timestamp: datetime
     system: SystemObservation | None

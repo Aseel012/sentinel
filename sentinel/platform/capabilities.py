@@ -28,7 +28,7 @@ class Capability:
 def detect_capabilities(info: PlatformInfo, proc_root: Path = Path("/proc")) -> tuple[Capability, ...]:
     if not info.is_linux:
         return tuple(Capability(name, CapabilityState.UNSUPPORTED, "Linux is required") for name in
-                     ("cpu", "memory", "system", "processes", "disk", "network", "systemd"))
+                     ("cpu", "memory", "system", "processes", "disk", "network", "systemd", "journal"))
     readable = lambda name: (proc_root / name).is_file() and (proc_root / name).exists()
     process_state = CapabilityState.SUPPORTED if proc_root.is_dir() else CapabilityState.UNAVAILABLE
     return (
@@ -39,6 +39,6 @@ def detect_capabilities(info: PlatformInfo, proc_root: Path = Path("/proc")) -> 
         Capability("disk", CapabilityState.SUPPORTED),
         Capability("network", CapabilityState.SUPPORTED if readable("net/dev") else CapabilityState.UNAVAILABLE),
         Capability("systemd", CapabilityState.SUPPORTED if which("systemctl") else CapabilityState.UNAVAILABLE),
-        Capability("journal", CapabilityState.NOT_IMPLEMENTED),
+        Capability("journal", CapabilityState.SUPPORTED if which("journalctl") else CapabilityState.UNAVAILABLE),
         Capability("notifications", CapabilityState.NOT_IMPLEMENTED),
     )

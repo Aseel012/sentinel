@@ -10,6 +10,7 @@ from sentinel.storage.database import (DEFAULT_BUSY_TIMEOUT_MS, database_connect
                                        resolve_database_path, transaction)
 from sentinel.storage.health import inspect_database
 from sentinel.storage.migrations import initialize_schema
+from sentinel.storage.schema import SCHEMA_VERSION
 
 
 class DatabasePathTests(unittest.TestCase):
@@ -117,5 +118,5 @@ class DatabaseConnectionTests(unittest.TestCase):
                 initialize_schema(connection)
                 health = inspect_database(connection)
         self.assertTrue(health.integrity_ok)
-        self.assertEqual(health.schema_version, 1)
+        self.assertEqual(health.schema_version, SCHEMA_VERSION)
         self.assertEqual(health.detail, "ok")

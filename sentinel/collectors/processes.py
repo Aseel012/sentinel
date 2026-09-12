@@ -3,26 +3,18 @@
 from __future__ import annotations
 
 import os
-import re
 from pathlib import Path
 
 from sentinel.models import ProcessObservation
 from sentinel.models.common import CollectionResult, CollectionStatus
+from sentinel.privacy import redact_sensitive_text
 from .base import collect
 
-_SECRET_NAME = r"token|password|passwd|secret|api[_-]?key|authorization"
-_SECRET_ASSIGNMENT = re.compile(rf"(?i)({_SECRET_NAME})(=|:)([^\s]+)")
-_SECRET_ARGUMENT = re.compile(rf"(?i)(--?(?:{_SECRET_NAME})\b)(\s+)([^\s]+)")
-_SHORT_SECRET_ARGUMENT = re.compile(r"(?i)(^|\s)(-[pk])(\s+)([^\s]+)")
-_SECRET_QUERY = re.compile(rf"(?i)([?&]({_SECRET_NAME)=)([^&\s]+)")
 _COMMAND_LIMIT = 1024
 
 
 def redact_command(command: str) -> str:
-    command = _SECRET_ASSIGNMENT.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", command)
-    command = _SECRET_ARGUMENT.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", command)
-    command = _SHORT_SECRET_ARGUMENT.sub(lambda match: f"{match.group(1)}{match.group(2)}{match.group(3)}[REDACTED]", command)
-    return _SECRET_QUERY.sub(lambda match: f"{match.group(1)}[REDACTED]", command)[:_COMMAND_LIMIT]
+    return redact_sensitive_text(command, max_length=_COMMAND_LIMIT)
 
 
 def parse_process_stat(text: str) -> tuple[str, str, int, int, int, int, int, int]:

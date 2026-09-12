@@ -1,9 +1,9 @@
 from .common import CollectionResult, CollectionStatus
 from .observations import (
-    CPUObservation, DiskObservation, MemoryObservation, NetworkObservation, ProcessObservation,
+    CPUObservation, DiskObservation, EventObservation, JournalBatch, MemoryObservation, NetworkObservation, ProcessObservation,
     ServiceObservation, SystemObservation, SystemSnapshot,
 )
 
 __all__ = ["CPUObservation", "CollectionResult", "CollectionStatus", "DiskObservation",
-           "MemoryObservation", "NetworkObservation", "ProcessObservation", "ServiceObservation",
+           "EventObservation", "JournalBatch", "MemoryObservation", "NetworkObservation", "ProcessObservation", "ServiceObservation",
            "SystemObservation", "SystemSnapshot"]

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 
 SCHEMA_V1_STATEMENTS: tuple[str, ...] = (
     """
@@ -174,11 +174,68 @@ _REQUIRED_COLUMNS = {
 _REQUIRED_INDEXES = {"idx_snapshots_observed_at", "idx_processes_snapshot_id", "idx_processes_lifetime",
                      "idx_disks_path_snapshot", "idx_networks_interface_snapshot", "idx_services_name_snapshot"}
 
+SCHEMA_V2_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS events (
+        cursor TEXT PRIMARY KEY,
+        observed_at TEXT NOT NULL,
+        source TEXT NOT NULL,
+        priority INTEGER,
+        unit TEXT,
+        pid INTEGER,
+        comm TEXT,
+        message TEXT NOT NULL,
+        boot_id TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_events_observed_at ON events(observed_at)",
+    "CREATE INDEX IF NOT EXISTS idx_events_unit_observed_at ON events(unit, observed_at)",
+    """
+    CREATE TABLE IF NOT EXISTS event_checkpoints (
+        source TEXT PRIMARY KEY,
+        cursor TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+)
+
 
 def create_schema_v1(connection: sqlite3.Connection) -> None:
     """Create schema version 1 inside the caller's transaction."""
     for statement in SCHEMA_V1_STATEMENTS:
         connection.execute(statement)
+
+
+def create_schema_v2(connection: sqlite3.Connection) -> None:
+    """Create independent event storage and source cursors inside a migration."""
+    for statement in SCHEMA_V2_STATEMENTS:
+        connection.execute(statement)
+
+
+def create_schema_v3(connection: sqlite3.Connection) -> None:
+    """Preserve event quality and the latest collection outcome."""
+    from datetime import UTC, datetime
+
+    connection.execute("ALTER TABLE events ADD COLUMN warnings TEXT NOT NULL DEFAULT '[]'")
+    connection.execute("UPDATE events SET warnings = '[\"legacy_quality_unknown\"]'")
+    connection.execute("""CREATE TABLE event_collection_results (
+        source TEXT PRIMARY KEY CHECK(source = 'journal'),
+        status TEXT NOT NULL CHECK(status IN ('success', 'partial', 'permission_denied',
+            'unsupported', 'transient_failure', 'invalid_data')),
+        collected_at TEXT NOT NULL, duration_seconds REAL NOT NULL CHECK(duration_seconds >= 0),
+        event_count INTEGER CHECK(event_count >= 0), error_code TEXT, error_message TEXT,
+        warnings TEXT NOT NULL
+    )""")
+    # V2 used variable precision ISO strings. Fixed precision preserves SQL time ordering.
+    for table, identity, column in (("events", "cursor", "observed_at"),
+                                    ("event_checkpoints", "source", "updated_at")):
+        rows = connection.execute(f"SELECT {identity}, {column} FROM {table}")
+        for key, value in rows:
+            parsed = datetime.fromisoformat(value)
+            if parsed.tzinfo is None or parsed.utcoffset() != UTC.utcoffset(parsed):
+                raise ValueError("stored event timestamps must be timezone-aware UTC")
+            timestamp = parsed.isoformat(timespec="microseconds")
+            connection.execute(f"UPDATE {table} SET {column} = ? WHERE {identity} = ?", (timestamp, key))
 
 
 def validate_schema_v1(connection: sqlite3.Connection) -> bool:
@@ -187,5 +244,21 @@ def validate_schema_v1(connection: sqlite3.Connection) -> bool:
         columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
         if not expected_columns.issubset(columns):
             return False
-    indexes = {row[1] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+    indexes = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
     return _REQUIRED_INDEXES.issubset(indexes)
+
+
+def validate_schema_v2(connection: sqlite3.Connection) -> bool:
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+    checkpoint_columns = {row[1] for row in connection.execute("PRAGMA table_info(event_checkpoints)")}
+    indexes = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+    return ({"cursor", "observed_at", "source", "priority", "unit", "pid", "comm", "message", "boot_id"}.issubset(columns)
+            and {"source", "cursor", "updated_at"}.issubset(checkpoint_columns)
+            and {"idx_events_observed_at", "idx_events_unit_observed_at"}.issubset(indexes))
+
+
+def validate_schema_v3(connection: sqlite3.Connection) -> bool:
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(event_collection_results)")}
+    event_columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
+    return "warnings" in event_columns and {"source", "status", "collected_at", "duration_seconds",
+        "event_count", "error_code", "error_message", "warnings"}.issubset(columns)

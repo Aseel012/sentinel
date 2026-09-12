@@ -24,7 +24,16 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertTrue({"snapshots", "system_observations", "memory_observations", "cpu_observations",
                          "process_observations", "disk_observations", "network_observations",
                          "service_observations", "collection_results", "collection_warnings",
-                         "schema_migrations"}.issubset(tables))
+                         "events", "event_checkpoints", "schema_migrations"}.issubset(tables))
+
+    def test_version_one_database_advances_to_event_schema_without_losing_snapshots(self) -> None:
+        with self.connection() as connection:
+            self.assertEqual(apply_migrations(connection, target_version=1), 1)
+            connection.execute("INSERT INTO snapshots(observed_at) VALUES (?)", ("2026-01-02T03:04:05+00:00",))
+            connection.commit()
+            self.assertEqual(initialize_schema(connection), SCHEMA_VERSION)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0], SCHEMA_VERSION)
 
     def test_initialization_is_idempotent_and_preserves_existing_data(self) -> None:
         with self.connection() as connection:
@@ -105,12 +114,22 @@ class SchemaMigrationTests(unittest.TestCase):
     def test_newer_schema_is_rejected_without_modification(self) -> None:
         with self.connection() as connection:
             initialize_schema(connection)
-            connection.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (2, ?)",
-                               ("2026-01-02T03:04:05+00:00",))
+            connection.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                               (SCHEMA_VERSION + 1, "2026-01-02T03:04:05+00:00"))
             connection.commit()
             with self.assertRaises(FutureSchemaError):
                 initialize_schema(connection)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0], 2)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0], SCHEMA_VERSION + 1)
+
+    def test_version_two_event_timestamps_and_facts_survive_migration(self) -> None:
+        with self.connection() as connection:
+            apply_migrations(connection, target_version=2)
+            connection.execute("INSERT INTO events(cursor, observed_at, source, message) VALUES (?, ?, ?, ?)",
+                               ("old", "2026-01-02T03:04:05+00:00", "journal", "keep"))
+            connection.commit()
+            initialize_schema(connection)
+            self.assertEqual(connection.execute("SELECT cursor, observed_at, message, warnings FROM events").fetchone(),
+                             ("old", "2026-01-02T03:04:05.000000+00:00", "keep", '["legacy_quality_unknown"]'))
 
     def test_sentinel_tables_without_migration_metadata_are_rejected(self) -> None:
         with self.connection() as connection:
