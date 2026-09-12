@@ -7,6 +7,10 @@ import unittest
 from unittest.mock import patch
 
 from sentinel.application.runtime_models import RuntimeCycle
+from sentinel.application.runtime_ownership import (
+    RUNTIME_OWNERSHIP_EXIT_CODE,
+    RuntimeAlreadyOwned,
+)
 from sentinel.application.sampler import SamplingRun
 from sentinel.main import main
 from sentinel.models import CollectionStatus
@@ -72,6 +76,19 @@ class RuntimeCLITests(unittest.TestCase):
                 contextlib.redirect_stdout(output):
             self.assertEqual(main(["run", "--cycles", "1"]), 0)
         self.assertIn("Cycle 1 completed", output.getvalue())
+        self.assertEqual({item: signal.getsignal(item) for item in before}, before)
+
+    def test_ownership_failure_is_bounded_and_restores_signal_handlers(self) -> None:
+        before = {item: signal.getsignal(item) for item in (signal.SIGINT, signal.SIGTERM)}
+        error = io.StringIO()
+        with patch.object(FakeRuntime, "run", side_effect=RuntimeAlreadyOwned("private")), \
+                patch("sentinel.main.ContinuousObservationRuntime", FakeRuntime), \
+                contextlib.redirect_stderr(error):
+            code = main(["run", "--cycles", "1"])
+        self.assertEqual(code, RUNTIME_OWNERSHIP_EXIT_CODE)
+        self.assertEqual(error.getvalue(), "sentinel run: another runtime owns this database\n")
+        self.assertNotIn("Traceback", error.getvalue())
+        self.assertNotIn("private", error.getvalue())
         self.assertEqual({item: signal.getsignal(item) for item in before}, before)
 
     def test_runtime_bounds_are_rejected_before_runtime_construction(self) -> None:

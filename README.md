@@ -26,4 +26,6 @@ Persistent storage is versioned, relational, and transactional. Pure comparisons
 
 Correlation records identity and temporal relationships. Deterministic diagnosis explains the strongest supported service-failure pattern, its provenance, limitations, and what remains unknown. Bounded incident inspection exposes remembered lifecycle, structured evidence, established and unknown facts, history, and the existing diagnosis without claiming current system state, causality, or root cause. The foreground `run` command composes collection, bounded persistence, journal checkpoints, temporal analysis, and incident reconciliation; finite `--cycles` makes operation testable, while omission runs until SIGINT or SIGTERM completes the active cycle. Anomaly scoring, alerting, notifications, AI agents, remediation, and daemon/service packaging are not implemented. See [architecture](docs/architecture.md), [collectors](docs/collectors.md), and [privacy](docs/privacy.md).
 
+Only one `sentinel run` process may own a database at a time. A competing runtime exits immediately with code 3 while inspection commands remain available. Linux releases the advisory ownership automatically after normal exit, signals, or a crash; Sentinel never guesses that a lock file is stale or deletes it.
+
 Run the regression suite with `python3 -m unittest discover -v` from the repository root.

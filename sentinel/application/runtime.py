@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Protocol
@@ -28,6 +29,7 @@ from sentinel.application.runtime_models import (
     RuntimeConfig,
     RuntimeCycle,
 )
+from sentinel.application.runtime_ownership import RuntimeLease
 from sentinel.application.sampler import Sampler, SamplingConfig, SamplingRun
 from sentinel.application.snapshot_service import SnapshotCollection
 from sentinel.models import CollectionResult, CollectionStatus, JournalBatch
@@ -71,6 +73,7 @@ class ContinuousObservationRuntime:
         monotonic: Callable[[], float] = time.monotonic,
         wait: Callable[[float], bool] | None = None,
         cycle_sink: Callable[[RuntimeCycle], None] | None = None,
+        runtime_lease: RuntimeLease | None = None,
     ) -> None:
         if config is not None and not isinstance(config, RuntimeConfig):
             raise TypeError("config must be a RuntimeConfig or None")
@@ -103,6 +106,9 @@ class ContinuousObservationRuntime:
         self._previous_collection: SnapshotCollection | None = None
         self._previous_observed_monotonic: float | None = None
         self._cycles_completed = 0
+        self._runtime_lease = (
+            RuntimeLease(database_path) if runtime_lease is None else runtime_lease
+        )
         self._sampler = Sampler(
             self,
             SamplingConfig(self._config.interval_seconds),
@@ -119,7 +125,8 @@ class ContinuousObservationRuntime:
             or not 1 <= max_cycles <= MAX_RUNTIME_CYCLES
         ):
             raise ValueError(f"max_cycles must be between 1 and {MAX_RUNTIME_CYCLES}, or None")
-        return self._sampler.run(max_samples=max_cycles)
+        with self._runtime_lease:
+            return self._sampler.run(max_samples=max_cycles)
 
     def record(self) -> RuntimeCycle:
         """Execute one cycle; storage and invariant failures intentionally propagate."""
@@ -181,7 +188,7 @@ class ContinuousObservationRuntime:
             formation.reconciliation.resolved_ids,
             _cycle_limitations(current, journal, correlation_events),
         )
-        self._previous_collection = current
+        self._previous_collection = _temporal_baseline(current)
         self._previous_observed_monotonic = observed_monotonic
         if self._cycle_sink is not None:
             self._cycle_sink(result)
@@ -217,6 +224,42 @@ def _observation_counts(collection: SnapshotCollection) -> tuple[tuple[str, int]
         ("services", len(snapshot.services)),
         ("system", int(snapshot.system is not None)),
     )
+
+
+def _temporal_baseline(collection: SnapshotCollection) -> SnapshotCollection:
+    """Retain only facts required by the next process/service comparison."""
+    processes = tuple(
+        replace(item, command=None, executable=None)
+        for item in collection.snapshot.processes
+    )
+    results = []
+    for name, result in collection.collector_results:
+        if name not in {"processes", "services"}:
+            continue
+        value = processes if name == "processes" and result.value is not None else result.value
+        results.append((
+            name,
+            replace(
+                result,
+                value=value,
+                duration_seconds=0.0,
+                error_code=None,
+                error_message=None,
+                warnings=(),
+            ),
+        ))
+    snapshot = replace(
+        collection.snapshot,
+        system=None,
+        memory=None,
+        cpu=None,
+        processes=processes,
+        disk=(),
+        network=(),
+        results=tuple((name, result.status.value) for name, result in results),
+        warnings=(),
+    )
+    return SnapshotCollection(snapshot, tuple(results))
 
 
 def _cycle_limitations(

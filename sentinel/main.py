@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import signal
+import sys
 from dataclasses import asdict
 from pathlib import Path
 
@@ -20,6 +21,10 @@ from sentinel.application.runtime_models import (
     MAX_RUNTIME_INTERVAL_SECONDS,
     MIN_RUNTIME_INTERVAL_SECONDS,
     RuntimeConfig,
+)
+from sentinel.application.runtime_ownership import (
+    RUNTIME_OWNERSHIP_EXIT_CODE,
+    RuntimeAlreadyOwned,
 )
 from sentinel.collectors.journal import DEFAULT_EVENT_LIMIT, MAX_EVENT_LIMIT, collect_journal
 from sentinel.cli.diagnosis_output import DIAGNOSIS_SCHEMA_VERSION, diagnosis_response, format_diagnosis
@@ -204,7 +209,14 @@ def main(argv: list[str] | None = None) -> int:
         try:
             for item, _ in previous_handlers:
                 signal.signal(item, request_stop)
-            runtime.run(max_cycles=args.cycles)
+            try:
+                runtime.run(max_cycles=args.cycles)
+            except RuntimeAlreadyOwned:
+                print(
+                    "sentinel run: another runtime owns this database",
+                    file=sys.stderr,
+                )
+                return RUNTIME_OWNERSHIP_EXIT_CODE
         finally:
             for item, handler in previous_handlers:
                 signal.signal(item, handler)

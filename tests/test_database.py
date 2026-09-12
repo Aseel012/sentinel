@@ -100,6 +100,28 @@ class DatabaseConnectionTests(unittest.TestCase):
                         raise RuntimeError("force rollback")
                 self.assertEqual(connection.execute("SELECT value FROM sample ORDER BY value").fetchall(), [(1,)])
 
+    def test_write_lock_timeout_is_bounded_and_visible(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sentinel.db"
+            first = open_connection(path, busy_timeout_ms=20)
+            second = open_connection(path, busy_timeout_ms=20)
+            try:
+                first.execute("CREATE TABLE sample (value INTEGER NOT NULL)")
+                first.commit()
+                first.execute("BEGIN IMMEDIATE")
+                first.execute("INSERT INTO sample VALUES (1)")
+                with self.assertRaisesRegex(sqlite3.OperationalError, "locked"):
+                    with transaction(second):
+                        second.execute("INSERT INTO sample VALUES (2)")
+                first.commit()
+                self.assertEqual(
+                    second.execute("SELECT value FROM sample").fetchall(),
+                    [(1,)],
+                )
+            finally:
+                first.close()
+                second.close()
+
     def test_rejects_invalid_transaction_mode_and_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "sentinel.db"

@@ -38,6 +38,14 @@ class IncrementingClock:
         return current
 
 
+class NoopRuntimeLease:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _type, _value, _traceback):
+        return None
+
+
 def collection_at(at: datetime, active_state: str = "active", *,
                   process_status: CollectionStatus = CollectionStatus.SUCCESS):
     original = collection()
@@ -94,6 +102,39 @@ class SequenceEventRecorder:
         return value
 
 
+class ConstantSnapshotRecorder:
+    def __init__(self, value) -> None:
+        self.value = value
+        self.calls = 0
+
+    def record(self) -> StoredSnapshot:
+        self.calls += 1
+        return StoredSnapshot(self.calls, self.value)
+
+
+class ConstantRecorder:
+    def __init__(self, value) -> None:
+        self.value = value
+        self.calls = 0
+
+    def record(self):
+        self.calls += 1
+        return self.value
+
+
+class RaisingRecorder:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def record(self):
+        raise self.error
+
+
+class RaisingEventReader:
+    def load_for_service_changes(self, changes, *, correlation_window, limit):
+        raise sqlite3.OperationalError("event query failed")
+
+
 class EmptyEventReader:
     def __init__(self) -> None:
         self.calls = []
@@ -132,6 +173,7 @@ class RuntimeTests(unittest.TestCase):
             monotonic=clock or IncrementingClock(),
             wait=lambda _: False,
             cycle_sink=sink,
+            runtime_lease=NoopRuntimeLease(),
         )
 
     def test_successful_cycle_is_structured_deterministic_and_private(self) -> None:
@@ -151,6 +193,20 @@ class RuntimeTests(unittest.TestCase):
         self.assertNotIn("worker --token", encoded)
         self.assertNotIn("/usr/bin/worker", encoded)
         self.assertNotIn("message", encoded)
+        baseline = runtime._previous_collection
+        self.assertIsNotNone(baseline)
+        self.assertEqual(
+            tuple(name for name, _ in baseline.collector_results),
+            ("processes", "services"),
+        )
+        self.assertTrue(
+            all(
+                item.command is None and item.executable is None
+                for item in baseline.snapshot.processes
+            )
+        )
+        self.assertIsNone(baseline.snapshot.system)
+        self.assertEqual(baseline.snapshot.disk, ())
 
     def test_partial_and_failed_sources_remain_visible_without_fake_facts(self) -> None:
         current = collection_at(NOW, process_status=CollectionStatus.TRANSIENT_FAILURE)
@@ -198,6 +254,61 @@ class RuntimeTests(unittest.TestCase):
             with self.subTest(error=type(error).__name__), self.assertRaises(type(error)):
                 runtime.record()
             self.assertEqual(emitted, [])
+
+    def test_each_failed_cycle_stage_preserves_the_prior_baseline(self) -> None:
+        failures = (
+            {"snapshot_recorder": RaisingRecorder(sqlite3.OperationalError("snapshot"))},
+            {"event_recorder": RaisingRecorder(sqlite3.OperationalError("journal"))},
+            {"event_reader": RaisingEventReader()},
+            {"incident_recorder": CapturingIncidentRecorder(
+                sqlite3.OperationalError("incident")
+            )},
+        )
+        for replacement in failures:
+            runtime = ContinuousObservationRuntime(
+                config=RuntimeConfig(interval_seconds=1),
+                snapshot_recorder=replacement.get(
+                    "snapshot_recorder",
+                    SequenceSnapshotRecorder(collection_at(NOW)),
+                ),
+                event_recorder=replacement.get(
+                    "event_recorder",
+                    SequenceEventRecorder(journal_result()),
+                ),
+                event_reader=replacement.get("event_reader", EmptyEventReader()),
+                incident_recorder=replacement.get(
+                    "incident_recorder",
+                    CapturingIncidentRecorder(),
+                ),
+                monotonic=IncrementingClock(),
+                runtime_lease=NoopRuntimeLease(),
+            )
+            with self.subTest(stage=tuple(replacement)), \
+                    self.assertRaises(sqlite3.OperationalError):
+                runtime.record()
+            self.assertIsNone(runtime._previous_collection)
+            self.assertIsNone(runtime._previous_observed_monotonic)
+            self.assertEqual(runtime._cycles_completed, 0)
+
+    def test_long_finite_run_keeps_only_one_sanitized_baseline(self) -> None:
+        cycles = 500
+        snapshot = ConstantSnapshotRecorder(collection_at(NOW))
+        runtime = ContinuousObservationRuntime(
+            config=RuntimeConfig(interval_seconds=1),
+            snapshot_recorder=snapshot,
+            event_recorder=ConstantRecorder(journal_result()),
+            event_reader=EmptyEventReader(),
+            incident_recorder=CapturingIncidentRecorder(),
+            monotonic=IncrementingClock(),
+            wait=lambda _: False,
+            runtime_lease=NoopRuntimeLease(),
+        )
+        result = runtime.run(max_cycles=cycles)
+        self.assertEqual(result.samples_completed, cycles)
+        self.assertEqual(snapshot.calls, cycles)
+        self.assertEqual(runtime._cycles_completed, cycles)
+        self.assertEqual(len(runtime._previous_collection.collector_results), 2)
+        self.assertNotIn("results", runtime.__dict__)
 
     def test_regressing_or_nonfinite_monotonic_clock_is_rejected(self) -> None:
         for values in ((1.0, 2.0, 0.0), (1.0, float("nan"))):
@@ -271,3 +382,77 @@ class RuntimeIntegrationTests(unittest.TestCase):
                 self.assertNotIn("raw private body",
                                  " ".join(item.summary or "" for item in incidents[0].evidence))
             self.assertEqual(seen_cursors, [None, "cursor-1", "cursor-1"])
+
+    def test_restart_is_conservative_idempotent_and_preserves_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sentinel.db"
+            event = EventObservation(
+                "restart-cursor",
+                NOW + timedelta(seconds=5),
+                "journal",
+                3,
+                "worker.service",
+                None,
+                None,
+                "private event body",
+                "boot",
+            )
+            seen_cursors = []
+
+            def collect_events(cursor):
+                seen_cursors.append(cursor)
+                batch = (
+                    JournalBatch((event,), event.cursor)
+                    if cursor is None
+                    else JournalBatch((), cursor)
+                )
+                return CollectionResult(
+                    batch,
+                    CollectionStatus.SUCCESS,
+                    event.timestamp,
+                    0,
+                )
+
+            class SnapshotSource:
+                def __init__(self, values):
+                    self.values = list(values)
+
+                def collect(self):
+                    return self.values.pop(0)
+
+            def runtime_for(values):
+                source = SnapshotSource(values)
+                return ContinuousObservationRuntime(
+                    path,
+                    RuntimeConfig(interval_seconds=1),
+                    snapshot_recorder=PersistentSnapshotService(path, source),
+                    event_recorder=JournalEventService(path, collect_events),
+                    incident_recorder=IncidentFormationService(path),
+                    monotonic=IncrementingClock(),
+                )
+
+            before_restart = runtime_for((
+                collection_at(NOW, "active"),
+                collection_at(NOW + timedelta(seconds=10), "failed"),
+                collection_at(NOW + timedelta(seconds=20), "failed"),
+            ))
+            before_restart.record()
+            opened = before_restart.record()
+            repeated = before_restart.record()
+            self.assertEqual(len(opened.reconciled_candidate_ids), 1)
+            self.assertEqual(repeated.reconciled_candidate_ids, ())
+
+            after_restart = runtime_for((
+                collection_at(NOW + timedelta(seconds=30), "active"),
+            ))
+            conservative = after_restart.record()
+            self.assertEqual(conservative.resolved_incident_ids, ())
+            with database_connection(path) as connection:
+                self.assertEqual(journal_cursor(connection), event.cursor)
+                incidents = IncidentRepository(connection).list_recent()
+                self.assertEqual(len(incidents), 1)
+                self.assertEqual(incidents[0].state, IncidentState.ACTIVE)
+            self.assertEqual(
+                seen_cursors,
+                [None, event.cursor, event.cursor, event.cursor],
+            )
