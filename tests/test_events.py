@@ -8,7 +8,7 @@ from sentinel.application.event_service import JournalEventService
 from sentinel.models import CollectionResult, CollectionStatus, EventObservation
 from sentinel.storage.database import database_connection
 from sentinel.storage.events import (JournalCheckpointConflict, delete_events_before, journal_cursor,
-                                     latest_journal_quality, load_events, store_journal_batch,
+                                     latest_journal_quality, load_event_window, load_events, store_journal_batch,
                                      store_journal_result)
 from sentinel.storage.migrations import initialize_schema
 from sentinel.storage.retention import delete_snapshots_before
@@ -112,3 +112,26 @@ class EventStorageTests(unittest.TestCase):
             self.assertEqual(delete_events_before(connection, now + timedelta(days=1)), 1)
             self.assertEqual(journal_cursor(connection), "retained-cursor")
             self.assertEqual(load_events(connection), ())
+
+    def test_unit_time_window_is_inclusive_ordered_and_reports_truncation(self) -> None:
+        now = datetime(2026, 1, 1, tzinfo=UTC)
+        facts = (
+            event("outside-before", now - timedelta(microseconds=1)),
+            event("boundary-start", now),
+            event("middle", now + timedelta(seconds=1)),
+            event("boundary-end", now + timedelta(seconds=2)),
+            EventObservation("other-unit", now, "journal", 5, "other.service", 1, "other",
+                             "message", "boot"),
+        )
+        with database_connection(self._path) as connection:
+            initialize_schema(connection)
+            store_journal_batch(connection, JournalBatch(facts, "other-unit"))
+            page = load_event_window(connection, unit="api.service", start=now,
+                                     end=now + timedelta(seconds=2), limit=2)
+            self.assertEqual([item.cursor for item in page.events], ["boundary-start", "middle"])
+            self.assertTrue(page.truncated)
+            complete = load_event_window(connection, unit="api.service", start=now,
+                                         end=now + timedelta(seconds=2), limit=3)
+            self.assertEqual([item.cursor for item in complete.events],
+                             ["boundary-start", "middle", "boundary-end"])
+            self.assertFalse(complete.truncated)

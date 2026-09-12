@@ -8,7 +8,9 @@ from datetime import UTC, datetime
 
 from .database import transaction
 from .schema import (SCHEMA_VERSION, create_schema_v1, create_schema_v2, create_schema_v3,
-                     validate_schema_v1, validate_schema_v2, validate_schema_v3)
+                     create_schema_v4, validate_schema_v1, validate_schema_v2,
+                     create_schema_v5, validate_schema_v3, validate_schema_v4,
+                     validate_schema_v5)
 
 Migration = Callable[[sqlite3.Connection], None]
 
@@ -29,13 +31,19 @@ def _migration_2(connection: sqlite3.Connection) -> None:
     create_schema_v2(connection)
 
 
-MIGRATIONS: Mapping[int, Migration] = {1: _migration_1, 2: _migration_2, 3: create_schema_v3}
+MIGRATIONS: Mapping[int, Migration] = {
+    1: _migration_1, 2: _migration_2, 3: create_schema_v3, 4: create_schema_v4,
+    5: create_schema_v5,
+}
 _SENTINEL_V1_TABLES = frozenset({
     "snapshots", "system_observations", "memory_observations", "cpu_observations",
     "process_observations", "disk_observations", "network_observations",
     "service_observations", "collection_results", "collection_warnings",
 })
-_SENTINEL_TABLES = _SENTINEL_V1_TABLES | frozenset({"events", "event_checkpoints", "event_collection_results"})
+_SENTINEL_TABLES = _SENTINEL_V1_TABLES | frozenset({
+    "events", "event_checkpoints", "event_collection_results", "incidents", "incident_evidence",
+    "incident_limitations", "incident_evidence_limitations",
+})
 _SCHEMA_V1_TABLES = frozenset({"schema_migrations"}) | _SENTINEL_V1_TABLES
 
 
@@ -75,6 +83,10 @@ def installed_schema_version(connection: sqlite3.Connection) -> int:
         raise SchemaMigrationError("database schema does not match Sentinel schema version 2")
     if versions[-1] >= 3 and not validate_schema_v3(connection):
         raise SchemaMigrationError("database schema does not match Sentinel schema version 3")
+    if versions[-1] >= 4 and not validate_schema_v4(connection):
+        raise SchemaMigrationError("database schema does not match Sentinel schema version 4")
+    if versions[-1] >= 5 and not validate_schema_v5(connection):
+        raise SchemaMigrationError("database schema does not match Sentinel schema version 5")
     return versions[-1]
 
 

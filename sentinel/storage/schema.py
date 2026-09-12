@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 
 SCHEMA_V1_STATEMENTS: tuple[str, ...] = (
     """
@@ -238,6 +238,84 @@ def create_schema_v3(connection: sqlite3.Connection) -> None:
             connection.execute(f"UPDATE {table} SET {column} = ? WHERE {identity} = ?", (timestamp, key))
 
 
+SCHEMA_V4_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE TABLE incidents (
+        incident_id TEXT PRIMARY KEY,
+        rule_id TEXT NOT NULL,
+        subject_type TEXT NOT NULL CHECK(subject_type = 'service'),
+        subject_id TEXT NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('active', 'resolved')),
+        started_at TEXT NOT NULL,
+        last_observed_at TEXT NOT NULL,
+        resolved_at TEXT,
+        CHECK((state = 'active' AND resolved_at IS NULL)
+              OR (state = 'resolved' AND resolved_at IS NOT NULL)),
+        CHECK(last_observed_at >= started_at),
+        CHECK(resolved_at IS NULL OR resolved_at >= last_observed_at)
+    )
+    """,
+    """
+    CREATE INDEX idx_incidents_state_observed
+    ON incidents(state, last_observed_at DESC, incident_id)
+    """,
+    """
+    CREATE INDEX idx_incidents_subject_observed
+    ON incidents(subject_type, subject_id, last_observed_at DESC, incident_id)
+    """,
+    """
+    CREATE TABLE incident_evidence (
+        incident_id TEXT NOT NULL REFERENCES incidents(incident_id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK(kind IN ('service_change', 'process_change', 'journal_event')),
+        evidence_id TEXT NOT NULL,
+        observed_at TEXT NOT NULL,
+        subject_type TEXT NOT NULL CHECK(subject_type = 'service'),
+        subject_id TEXT NOT NULL,
+        reason TEXT NOT NULL CHECK(reason IN (
+            'service_change_anchor', 'service_unit_match', 'explicit_process_association'
+        )),
+        summary TEXT,
+        PRIMARY KEY(incident_id, kind, evidence_id)
+    )
+    """,
+    """
+    CREATE INDEX idx_incident_evidence_time
+    ON incident_evidence(incident_id, observed_at, kind, evidence_id)
+    """,
+    """
+    CREATE TABLE incident_limitations (
+        incident_id TEXT NOT NULL REFERENCES incidents(incident_id) ON DELETE CASCADE,
+        limitation TEXT NOT NULL,
+        PRIMARY KEY(incident_id, limitation)
+    )
+    """,
+    """
+    CREATE TABLE incident_evidence_limitations (
+        incident_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        evidence_id TEXT NOT NULL,
+        limitation TEXT NOT NULL,
+        PRIMARY KEY(incident_id, kind, evidence_id, limitation),
+        FOREIGN KEY(incident_id, kind, evidence_id)
+            REFERENCES incident_evidence(incident_id, kind, evidence_id) ON DELETE CASCADE
+    )
+    """,
+)
+
+
+def create_schema_v4(connection: sqlite3.Connection) -> None:
+    """Create normalized derived incident state inside the caller's migration."""
+    for statement in SCHEMA_V4_STATEMENTS:
+        connection.execute(statement)
+
+
+def create_schema_v5(connection: sqlite3.Connection) -> None:
+    """Add machine-readable evidence facts required by deterministic diagnosis."""
+    connection.execute(
+        "ALTER TABLE incident_evidence ADD COLUMN fact TEXT NOT NULL DEFAULT 'unknown'"
+    )
+
+
 def validate_schema_v1(connection: sqlite3.Connection) -> bool:
     """Verify that a database claiming schema v1 has its expected query structure."""
     for table, expected_columns in _REQUIRED_COLUMNS.items():
@@ -262,3 +340,26 @@ def validate_schema_v3(connection: sqlite3.Connection) -> bool:
     event_columns = {row[1] for row in connection.execute("PRAGMA table_info(events)")}
     return "warnings" in event_columns and {"source", "status", "collected_at", "duration_seconds",
         "event_count", "error_code", "error_message", "warnings"}.issubset(columns)
+
+
+def validate_schema_v4(connection: sqlite3.Connection) -> bool:
+    required = {
+        "incidents": {"incident_id", "rule_id", "subject_type", "subject_id", "state", "started_at",
+                      "last_observed_at", "resolved_at"},
+        "incident_evidence": {"incident_id", "kind", "evidence_id", "observed_at", "subject_type",
+                              "subject_id", "reason", "summary"},
+        "incident_limitations": {"incident_id", "limitation"},
+        "incident_evidence_limitations": {"incident_id", "kind", "evidence_id", "limitation"},
+    }
+    for table, expected_columns in required.items():
+        columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        if not expected_columns.issubset(columns):
+            return False
+    indexes = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    return {"idx_incidents_state_observed", "idx_incidents_subject_observed",
+            "idx_incident_evidence_time"}.issubset(indexes)
+
+
+def validate_schema_v5(connection: sqlite3.Connection) -> bool:
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(incident_evidence)")}
+    return "fact" in columns

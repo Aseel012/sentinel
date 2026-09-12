@@ -1,12 +1,13 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from sentinel.collectors.cpu import parse_cpu_stat
 from sentinel.collectors.memory import parse_meminfo
 from sentinel.collectors.network import parse_network_dev
 from sentinel.collectors.processes import parse_process_stat, redact_command
-from sentinel.models import CollectionStatus
+from sentinel.models import CollectionStatus, ProcessObservation
 from sentinel.models.common import CollectionResult
 from sentinel.collectors.processes import collect_processes
 
@@ -54,3 +55,19 @@ class CollectorTests(unittest.TestCase):
         self.assertIs(result.status, CollectionStatus.PARTIAL)
         self.assertEqual(result.value, ())
         self.assertTrue(result.warnings)
+
+    def test_process_collection_is_deterministically_bounded_and_partial(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for pid in (3, 1, 2):
+                (root / str(pid)).mkdir()
+            with patch("sentinel.collectors.processes.read_process",
+                       side_effect=lambda pid, _: ProcessObservation(
+                           pid, 0, str(pid), "S", 1, 1, 1, 1, pid, None, None,
+                       )):
+                result = collect_processes(root, max_processes=2)
+        self.assertIs(result.status, CollectionStatus.PARTIAL)
+        self.assertEqual(tuple(item.pid for item in result.value), (1, 2))
+        self.assertIn("process observation limit reached (2)", result.warnings)
+        with self.assertRaises(ValueError):
+            collect_processes(max_processes=0)

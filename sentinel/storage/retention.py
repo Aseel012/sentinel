@@ -30,6 +30,19 @@ def trim_events(connection: sqlite3.Connection, max_events: int) -> int:
     return cursor.rowcount
 
 
+def trim_snapshots(connection: sqlite3.Connection, max_snapshots: int) -> int:
+    """Keep newest snapshots inside the caller's transaction with cascading children."""
+    if (isinstance(max_snapshots, bool) or not isinstance(max_snapshots, int)
+            or max_snapshots <= 0):
+        raise ValueError("max_snapshots must be a positive integer")
+    if not connection.in_transaction:
+        raise RuntimeError("snapshot trimming requires a transaction")
+    cursor = connection.execute("""DELETE FROM snapshots WHERE id IN (
+        SELECT id FROM snapshots ORDER BY id DESC LIMIT -1 OFFSET ?
+    )""", (max_snapshots,))
+    return cursor.rowcount
+
+
 def delete_snapshots_before(connection: sqlite3.Connection, cutoff: datetime) -> int:
     """Delete snapshots strictly before a UTC cutoff and return the number removed.
 
@@ -40,4 +53,16 @@ def delete_snapshots_before(connection: sqlite3.Connection, cutoff: datetime) ->
         raise ValueError("retention cutoff must be timezone-aware UTC")
     with transaction(connection):
         cursor = connection.execute("DELETE FROM snapshots WHERE observed_at < ?", (cutoff.isoformat(),))
+    return cursor.rowcount
+
+
+def delete_resolved_incidents_before(connection: sqlite3.Connection, cutoff: datetime) -> int:
+    """Delete derived incidents resolved before a UTC cutoff, preserving active state."""
+    if cutoff.tzinfo is None or cutoff.utcoffset() != UTC.utcoffset(cutoff):
+        raise ValueError("incident retention cutoff must be timezone-aware UTC")
+    with transaction(connection):
+        cursor = connection.execute(
+            "DELETE FROM incidents WHERE state = 'resolved' AND resolved_at < ?",
+            (cutoff.isoformat(timespec="microseconds"),),
+        )
     return cursor.rowcount

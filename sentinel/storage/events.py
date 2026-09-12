@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sentinel.models import CollectionResult, CollectionStatus, EventObservation, JournalBatch
@@ -17,6 +18,14 @@ _UNCHECKED = object()
 
 class JournalCheckpointConflict(RuntimeError):
     """Another collector advanced the checkpoint while this batch was collected."""
+
+
+@dataclass(frozen=True, slots=True)
+class EventWindow:
+    """A bounded chronological event range and whether additional matches exist."""
+
+    events: tuple[EventObservation, ...]
+    truncated: bool
 
 
 def journal_cursor(connection: sqlite3.Connection) -> str | None:
@@ -83,6 +92,37 @@ def load_events(connection: sqlite3.Connection, *, limit: int = 200, unit: str |
         (*values, limit))
     return tuple(EventObservation(row[0], datetime.fromisoformat(row[1]), *row[2:9],
                                   warnings=tuple(json.loads(row[9]))) for row in rows)
+
+
+def load_event_window(
+    connection: sqlite3.Connection,
+    *,
+    unit: str,
+    start: datetime,
+    end: datetime,
+    limit: int = 200,
+) -> EventWindow:
+    """Read an inclusive indexed unit/time window without hiding a result cap."""
+    if not isinstance(unit, str) or not unit or len(unit) > 512:
+        raise ValueError("unit must contain between 1 and 512 characters")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= DEFAULT_MAX_EVENTS:
+        raise ValueError("limit must be between 1 and 10000")
+    start_value = _timestamp(start)
+    end_value = _timestamp(end)
+    if end < start:
+        raise ValueError("event window end cannot precede start")
+    rows = tuple(connection.execute(
+        """SELECT cursor, observed_at, source, priority, unit, pid, comm, message, boot_id, warnings
+           FROM events WHERE unit = ? AND observed_at >= ? AND observed_at <= ?
+           ORDER BY observed_at ASC, cursor ASC LIMIT ?""",
+        (unit, start_value, end_value, limit + 1),
+    ))
+    events = tuple(
+        EventObservation(row[0], datetime.fromisoformat(row[1]), *row[2:9],
+                         warnings=tuple(json.loads(row[9])))
+        for row in rows[:limit]
+    )
+    return EventWindow(events, len(rows) > limit)
 
 
 def _check_cursor(connection: sqlite3.Connection, expected: object) -> None:

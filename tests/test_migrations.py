@@ -24,7 +24,9 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertTrue({"snapshots", "system_observations", "memory_observations", "cpu_observations",
                          "process_observations", "disk_observations", "network_observations",
                          "service_observations", "collection_results", "collection_warnings",
-                         "events", "event_checkpoints", "schema_migrations"}.issubset(tables))
+                         "events", "event_checkpoints", "schema_migrations", "incidents",
+                         "incident_evidence", "incident_limitations",
+                         "incident_evidence_limitations"}.issubset(tables))
 
     def test_version_one_database_advances_to_event_schema_without_losing_snapshots(self) -> None:
         with self.connection() as connection:
@@ -130,6 +132,26 @@ class SchemaMigrationTests(unittest.TestCase):
             initialize_schema(connection)
             self.assertEqual(connection.execute("SELECT cursor, observed_at, message, warnings FROM events").fetchone(),
                              ("old", "2026-01-02T03:04:05.000000+00:00", "keep", '["legacy_quality_unknown"]'))
+
+    def test_version_four_incident_evidence_survives_with_unknown_structured_fact(self) -> None:
+        with self.connection() as connection:
+            apply_migrations(connection, target_version=4)
+            incident_id = "a" * 64
+            timestamp = "2026-01-02T03:04:05.000000+00:00"
+            connection.execute("""INSERT INTO incidents(
+                incident_id, rule_id, subject_type, subject_id, state, started_at,
+                last_observed_at, resolved_at
+            ) VALUES (?, 'legacy-rule', 'service', 'api.service', 'active', ?, ?, NULL)""",
+                               (incident_id, timestamp, timestamp))
+            connection.execute("""INSERT INTO incident_evidence(
+                incident_id, kind, evidence_id, observed_at, subject_type, subject_id, reason, summary
+            ) VALUES (?, 'service_change', 'legacy-anchor', ?, 'service', 'api.service',
+                      'service_change_anchor', 'legacy summary')""", (incident_id, timestamp))
+            connection.commit()
+            self.assertEqual(initialize_schema(connection), SCHEMA_VERSION)
+            self.assertEqual(connection.execute(
+                "SELECT evidence_id, fact FROM incident_evidence"
+            ).fetchone(), ("legacy-anchor", "unknown"))
 
     def test_sentinel_tables_without_migration_metadata_are_rejected(self) -> None:
         with self.connection() as connection:

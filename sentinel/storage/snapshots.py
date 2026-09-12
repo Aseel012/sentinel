@@ -12,6 +12,7 @@ from sentinel.models import (CPUObservation, CollectionResult, CollectionStatus,
                              SystemObservation, SystemSnapshot)
 
 from .database import transaction
+from .retention import trim_snapshots
 
 
 class SnapshotStorageError(RuntimeError):
@@ -51,8 +52,13 @@ class SnapshotRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
-    def save(self, collection: SnapshotCollection) -> int:
+    def save(self, collection: SnapshotCollection, *, max_snapshots: int | None = None) -> int:
         """Persist a full collection and return its SQLite snapshot identity."""
+        if max_snapshots is not None and (
+            isinstance(max_snapshots, bool) or not isinstance(max_snapshots, int)
+            or max_snapshots <= 0
+        ):
+            raise ValueError("max_snapshots must be a positive integer or None")
         snapshot = collection.snapshot
         result_names = tuple(name for name, _ in collection.collector_results)
         snapshot_statuses = tuple(snapshot.results)
@@ -71,6 +77,8 @@ class SnapshotRepository:
             self._insert_single_observations(snapshot_id, snapshot)
             self._insert_child_observations(snapshot_id, snapshot)
             self._insert_collection_results(snapshot_id, collection.collector_results)
+            if max_snapshots is not None:
+                trim_snapshots(self._connection, max_snapshots)
         return snapshot_id
 
     def get(self, snapshot_id: int) -> StoredSnapshot | None:

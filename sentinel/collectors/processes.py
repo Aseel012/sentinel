@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from heapq import nsmallest
 from pathlib import Path
 
 from sentinel.models import ProcessObservation
@@ -11,6 +12,8 @@ from sentinel.privacy import redact_sensitive_text
 from .base import collect
 
 _COMMAND_LIMIT = 1024
+DEFAULT_PROCESS_LIMIT = 10_000
+MAX_PROCESS_LIMIT = 100_000
 
 
 def redact_command(command: str) -> str:
@@ -51,13 +54,26 @@ def read_process(pid: int, proc_root: Path) -> ProcessObservation:
                               start_time, command, executable)
 
 
-def collect_processes(proc_root: Path = Path("/proc")) -> CollectionResult[tuple[ProcessObservation, ...]]:
+def collect_processes(
+    proc_root: Path = Path("/proc"),
+    *,
+    max_processes: int = DEFAULT_PROCESS_LIMIT,
+) -> CollectionResult[tuple[ProcessObservation, ...]]:
+    if (isinstance(max_processes, bool) or not isinstance(max_processes, int)
+            or not 1 <= max_processes <= MAX_PROCESS_LIMIT):
+        raise ValueError(f"max_processes must be between 1 and {MAX_PROCESS_LIMIT}")
+
     def operation() -> tuple[tuple[ProcessObservation, ...], tuple[str, ...]]:
         observations: list[ProcessObservation] = []
         warnings: list[str] = []
-        for entry in proc_root.iterdir():
-            if not entry.name.isdecimal():
-                continue
+        entries = nsmallest(
+            max_processes + 1,
+            (entry for entry in proc_root.iterdir() if entry.name.isdecimal()),
+            key=lambda entry: int(entry.name),
+        )
+        if len(entries) > max_processes:
+            warnings.append(f"process observation limit reached ({max_processes})")
+        for entry in entries[:max_processes]:
             try:
                 observations.append(read_process(int(entry.name), proc_root))
             except (FileNotFoundError, ProcessLookupError):

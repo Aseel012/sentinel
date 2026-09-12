@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from sentinel.collectors.journal import collect_journal
+from sentinel.collectors.journal import MAX_EVENT_LIMIT, collect_journal
 from sentinel.models import CollectionResult, CollectionStatus, JournalBatch
 from sentinel.storage.database import database_connection
 from sentinel.storage.events import DEFAULT_MAX_EVENTS, JournalCheckpointConflict, journal_cursor, store_journal_result
@@ -34,6 +34,8 @@ class JournalEventService:
             initialize_schema(connection)
             previous_cursor = journal_cursor(connection)
             result = self._collector(previous_cursor)
+            if result.value is not None and len(result.value.events) > MAX_EVENT_LIMIT:
+                raise ValueError(f"journal batch cannot exceed {MAX_EVENT_LIMIT} events")
             try:
                 store_journal_result(connection, result, expected_cursor=previous_cursor,
                                      max_events=self._max_events)

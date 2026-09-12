@@ -69,3 +69,15 @@ class EventServiceTests(unittest.TestCase):
         for value in (0, -1, True, 1.5):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 JournalEventService(self.path, max_events=value)
+
+    def test_oversized_injected_batch_is_rejected_without_advancing_cursor(self) -> None:
+        events = tuple(EventObservation(f"cursor-{index}", NOW, "journal", 5, None,
+                                        None, None, "bounded", "boot")
+                       for index in range(1_001))
+        oversized = CollectionResult(JournalBatch(events, events[-1].cursor),
+                                     CollectionStatus.SUCCESS, NOW, 0)
+        with self.assertRaises(ValueError):
+            JournalEventService(self.path, lambda _: oversized).record()
+        with database_connection(self.path) as connection:
+            self.assertIsNone(journal_cursor(connection))
+            self.assertEqual(load_events(connection), ())
