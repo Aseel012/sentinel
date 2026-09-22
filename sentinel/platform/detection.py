@@ -17,7 +17,6 @@ class PlatformInfo:
     proc_available: bool
     sys_available: bool
 
-
 def detect_platform(proc_root: Path = Path("/proc"), sys_root: Path = Path("/sys")) -> PlatformInfo:
     return PlatformInfo(
         is_linux=sys.platform.startswith("linux"),
