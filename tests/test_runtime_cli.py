@@ -18,7 +18,6 @@ from sentinel.models import CollectionStatus
 
 NOW = datetime(2026, 8, 1, tzinfo=UTC)
 
-
 def cycle() -> RuntimeCycle:
     return RuntimeCycle(
         1, NOW, 1.0, 1.25, 0.25, 7,
