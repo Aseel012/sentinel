@@ -5,7 +5,6 @@ from unittest.mock import patch
 from sentinel.platform.capabilities import CapabilityState, detect_capabilities
 from sentinel.platform.detection import PlatformInfo
 
-
 class CapabilityTests(unittest.TestCase):
     def test_journal_capability_tracks_journalctl_availability(self) -> None:
         info = PlatformInfo(True, "Linux", "kernel", "x86_64", True, True)
