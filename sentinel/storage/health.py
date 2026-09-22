@@ -7,14 +7,12 @@ from dataclasses import dataclass
 
 from .migrations import installed_schema_version
 
-
 @dataclass(frozen=True, slots=True)
 class DatabaseHealth:
     schema_version: int
     sqlite_version: str
     integrity_ok: bool
     detail: str
-
 
 def inspect_database(connection: sqlite3.Connection) -> DatabaseHealth:
     """Run SQLite's read-only integrity check and expose its precise result.
