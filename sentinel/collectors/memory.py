@@ -6,7 +6,6 @@ from sentinel.models import MemoryObservation
 from sentinel.models.common import CollectionResult
 from .base import collect
 
-
 def parse_meminfo(text: str) -> MemoryObservation:
     values: dict[str, int] = {}
     for line in text.splitlines():
