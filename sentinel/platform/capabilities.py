@@ -9,7 +9,6 @@ from shutil import which
 
 from .detection import PlatformInfo
 
-
 class CapabilityState(StrEnum):
     SUPPORTED = "supported"
     DEGRADED = "degraded"
