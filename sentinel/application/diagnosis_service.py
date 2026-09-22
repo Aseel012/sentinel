@@ -10,7 +10,6 @@ from sentinel.storage.database import database_connection
 from sentinel.storage.incidents import IncidentRepository, MAX_INCIDENT_LIMIT
 from sentinel.storage.migrations import initialize_schema
 
-
 class DiagnosisService:
     def __init__(self, database_path: str | Path | None = None) -> None:
         self._database_path = database_path
