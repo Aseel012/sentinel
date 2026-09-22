@@ -29,7 +29,6 @@ def cycle() -> RuntimeCycle:
         ("collector_processes_partial",),
     )
 
-
 class FakeRuntime:
     instance = None
 
