@@ -17,7 +17,6 @@ from sentinel.storage.retention import delete_snapshots_before
 def event(cursor: str, timestamp: datetime) -> EventObservation:
     return EventObservation(cursor, timestamp, "journal", 5, "api.service", 12, "api", "message", "boot")
 
-
 class EventStorageTests(unittest.TestCase):
     def setUp(self) -> None:
         self._directory = tempfile.TemporaryDirectory()
